@@ -4,11 +4,9 @@ import { Toaster } from 'react-hot-toast';
 import App from './App';
 import './style.css';
 import { registerServiceWorker } from './utils/registerSW';
-import { seedDatabase } from './db/seed';
 
 // Initialize PWA
 void registerServiceWorker();
-void seedDatabase();
 
 createRoot(document.getElementById('app') as HTMLElement).render(
   <React.StrictMode>
