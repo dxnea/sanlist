@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node scripts/update-sw-assets.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {
@@ -17,10 +17,13 @@
   },
   "dependencies": {
     "axios": "^1.13.6",
+    "dexie": "^4.4.2",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-hot-toast": "^2.6.0",
     "react-icons": "^5.6.0",
+    "react-virtuoso": "^4.18.3",
+    "react-window": "^2.2.7",
     "zustand": "^5.0.12"
   }
 }

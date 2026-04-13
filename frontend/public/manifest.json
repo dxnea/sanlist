@@ -1,0 +1,19 @@
+{
+  "name": "Сантехнический помощник",
+  "short_name": "СантехПомощник",
+  "description": "Каталог сантехнических товаров с офлайн-доступом",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#2563eb",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities"]
+}

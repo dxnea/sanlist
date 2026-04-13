@@ -1,25 +1,31 @@
 import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import axios, { type AxiosRequestConfig } from 'axios';
+import { useDebounce } from './hooks/useDebounce';
 import toast from 'react-hot-toast';
+import { VirtualProductsGrid } from './components/VirtualProductsGrid';
 import {
   FiCheck,
   FiChevronDown,
   FiChevronRight,
   FiClock,
   FiEdit2,
-  FiEye,
   FiMenu,
   FiMessageSquare,
   FiMoon,
   FiPlus,
   FiSearch,
   FiShoppingCart,
+  FiSliders,
   FiStar,
   FiSun,
+  FiTrendingUp,
   FiTrash2,
+  FiUpload,
   FiX,
 } from 'react-icons/fi';
 import { useWorkspaceStore } from './store/useWorkspaceStore';
+import { useProducts } from './hooks/useProducts';
+import { readFileAsDataURL } from './utils/fileReader';
+import { importPwaExport } from './db/importExport';
 
 type Category = {
   id: number;
@@ -31,7 +37,6 @@ type Category = {
 type Product = {
   id: number;
   name: string;
-  sku: string | null;
   price: number | null;
   unit: string;
   image_url: string | null;
@@ -61,7 +66,6 @@ type ShoppingList = {
 
 type ProductFormState = {
   name: string;
-  sku: string;
   price: string;
   unit: string;
   categoryId: string;
@@ -95,15 +99,16 @@ type PromptDialogState = {
   multiline: boolean;
 };
 
-const API_BASE = '/api';
 const THEME_KEY = 'santex_theme_v1';
 const LEGACY_CART_KEY = 'santex_cart_v1';
 const LEGACY_MIGRATION_DONE_KEY = 'santex_cart_migrated_v2';
 const EXPANDED_KEY = 'santex_expanded_categories_v1';
+const CATALOG_DESKTOP_COLUMNS_KEY = 'santex_catalog_desktop_columns_v1';
+const CATALOG_MOBILE_COLUMNS_KEY = 'santex_catalog_mobile_columns_v1';
+const CATALOG_COMPACT_KEY = 'santex_catalog_compact_v1';
 
 const emptyProductForm: ProductFormState = {
   name: '',
-  sku: '',
   price: '',
   unit: 'шт',
   categoryId: '',
@@ -196,15 +201,258 @@ function isEditableElement(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
 }
 
+
+
+
+// type VirtualProductsGridProps = {
+//   products: Product[];
+//   favoriteSet: Set<number>;
+//   qtyDrafts: Record<number, string>;
+//   isListBusy: boolean;
+//   isCompact: boolean;
+//   desktopColumns: 1 | 2 | 3 | 4 | 5;
+//   mobileColumns: 1 | 2 | 3 | 4 | 5;
+//   hasMoreProducts: boolean;
+//   isLoadingMoreProducts: boolean;
+//   onLoadMoreProducts: () => void;
+//   onOpenPreview: (product: Product) => void;
+//   onToggleFavorite: (productId: number) => void;
+//   onEditProduct: (product: Product) => void;
+//   onDeleteProduct: (product: Product) => void;
+//   onQtyDraftChange: (productId: number, value: string) => void;
+//   onAddToCurrentList: (product: Product, quantity: number) => void;
+//   lastLoadMoreRowRef: React.MutableRefObject<number>;
+// };
+
+// function VirtualProductsGrid(props: VirtualProductsGridProps) {
+//   const {
+//     products,
+//     favoriteSet,
+//     qtyDrafts,
+//     isListBusy,
+//     isCompact,
+//     desktopColumns,
+//     mobileColumns,
+//     hasMoreProducts,
+//     isLoadingMoreProducts,
+//     onLoadMoreProducts,
+//     onOpenPreview,
+//     onToggleFavorite,
+//     onEditProduct,
+//     onDeleteProduct,
+//     onQtyDraftChange,
+//     onAddToCurrentList,
+//     lastLoadMoreRowRef,
+//   } = props;
+
+//   const viewportRef = useRef<HTMLDivElement | null>(null);
+//   const scrollTopRef = useRef(0);
+//   const prevLengthRef = useRef(products.length);
+//   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+
+//   useEffect(() => {
+//     const element = viewportRef.current;
+//     if (!element) {
+//       return;
+//     }
+
+//     const resize = () => {
+//       setViewportSize({
+//         width: Math.max(0, element.clientWidth),
+//         height: Math.max(0, element.clientHeight),
+//       });
+//     };
+
+//     resize();
+
+//     const observer = new ResizeObserver(() => resize());
+//     observer.observe(element);
+//     return () => observer.disconnect();
+//   }, []);
+
+//   // Восстанавливаем позицию скролла после подгрузки товаров
+//   useEffect(() => {
+//     const prevLength = prevLengthRef.current;
+//     const currentLength = products.length;
+    
+//     // Если товары добавились (режим append) и мы были у конца списка
+//     if (currentLength > prevLength && scrollTopRef.current > 0 && viewportRef.current) {
+//       requestAnimationFrame(() => {
+//         if (viewportRef.current) {
+//           viewportRef.current.scrollTop = scrollTopRef.current;
+//         }
+//       });
+//     }
+    
+//     prevLengthRef.current = currentLength;
+//   }, [products.length]);
+
+//   const isMobileWidth = viewportSize.width <= 767;
+//   const columnCount = isMobileWidth ? mobileColumns : desktopColumns;
+//   const gap = isCompact ? 8 : 12;
+//   const baseRowHeight = isCompact ? 312 : 350;
+//   const denseColumnsExtraHeight = columnCount >= 5 ? 36 : columnCount === 4 ? 20 : columnCount === 3 ? 12 : 0;
+//   const mobileExtraHeight = isMobileWidth && columnCount >= 3 ? 18 : 0;
+//   // rowHeight = высота карточки + gap (отступ снизу строки)
+//   const rowHeight = baseRowHeight + denseColumnsExtraHeight + mobileExtraHeight + gap;
+//   const gridWidth = Math.max(0, viewportSize.width);
+//   const gridHeight = Math.max(260, viewportSize.height);
+//   const rowCount = Math.max(1, Math.ceil(products.length / columnCount));
+
+//   const onRowsRendered = useCallback(
+//     (visibleRows: { startIndex: number; stopIndex: number }) => {
+//       if (!hasMoreProducts || isLoadingMoreProducts || products.length === 0) {
+//         return;
+//       }
+
+//       const threshold = Math.max(0, rowCount - 2);
+//       if (visibleRows.stopIndex < threshold) {
+//         return;
+//       }
+
+//       // Защита от повторной подгрузки - проверяем что индекс больше предыдущего
+//       if (visibleRows.stopIndex <= lastLoadMoreRowRef.current) {
+//         return;
+//       }
+
+//       lastLoadMoreRowRef.current = visibleRows.stopIndex;
+      
+//       // Сохраняем позицию скролла перед подгрузкой
+//       scrollTopRef.current = viewportRef.current?.scrollTop || 0;
+//       onLoadMoreProducts();
+//     },
+//     [hasMoreProducts, isLoadingMoreProducts, rowCount, products.length, onLoadMoreProducts]
+//   );
+
+//   type VirtualRowProps = {
+//     products: Product[];
+//     columnCount: number;
+//     gap: number;
+//     gridClassName: string;
+//     favoriteSet: Set<number>;
+//     qtyDrafts: Record<number, string>;
+//     isListBusy: boolean;
+//     onOpenPreview: (product: Product) => void;
+//     onToggleFavorite: (productId: number) => void;
+//     onEditProduct: (product: Product) => void;
+//     onDeleteProduct: (product: Product) => void;
+//     onQtyDraftChange: (productId: number, value: string) => void;
+//     onAddToCurrentList: (product: Product, quantity: number) => void;
+//   };
+
+//   const Row = useCallback(
+//     ({ index, style, ...rowProps }: RowComponentProps<VirtualRowProps>) => {
+//       const start = index * rowProps.columnCount;
+//       const rowProducts: Product[] = rowProps.products.slice(start, start + rowProps.columnCount);
+
+//       return (
+//         <div
+//           style={{
+//             ...style,
+//             boxSizing: 'border-box',
+//             paddingBottom: rowProps.gap,
+//           }}
+//         >
+//           <div
+//             className={rowProps.gridClassName}
+//             style={{
+//               display: 'grid',
+//               gridTemplateColumns: `repeat(${rowProps.columnCount}, minmax(0, 1fr))`,
+//               gap: `${rowProps.gap}px`,
+//             }}
+//           >
+//             {rowProducts.map((product) => {
+//               const qtyDraft = Object.prototype.hasOwnProperty.call(rowProps.qtyDrafts, product.id)
+//                 ? rowProps.qtyDrafts[product.id]
+//                 : '';
+
+//               return (
+//                 <ProductCard
+//                   key={product.id}
+//                   product={product}
+//                   isFavorite={rowProps.favoriteSet.has(product.id)}
+//                   qtyDraft={qtyDraft}
+//                   isListBusy={rowProps.isListBusy}
+//                   onOpenPreview={rowProps.onOpenPreview}
+//                   onToggleFavorite={rowProps.onToggleFavorite}
+//                   onEditProduct={rowProps.onEditProduct}
+//                   onDeleteProduct={rowProps.onDeleteProduct}
+//                   onQtyDraftChange={rowProps.onQtyDraftChange}
+//                   onAddToCurrentList={rowProps.onAddToCurrentList}
+//                 />
+//               );
+//             })}
+//           </div>
+//         </div>
+//       );
+//     },
+//     []
+//   );
+
+//   const rowProps = useMemo(
+//     () => ({
+//       products,
+//       columnCount,
+//       gap,
+//       gridClassName: `products-grid ${isCompact ? 'compact' : ''} ${isMobileWidth ? `mobile-cols-${columnCount}` : `desktop-cols-${columnCount}`}`.trim(),
+//       favoriteSet,
+//       qtyDrafts,
+//       isListBusy,
+//       onOpenPreview,
+//       onToggleFavorite,
+//       onEditProduct,
+//       onDeleteProduct,
+//       onQtyDraftChange,
+//       onAddToCurrentList,
+//     }),
+//     [
+//       products,
+//       columnCount,
+//       gap,
+//       isCompact,
+//       isMobileWidth,
+//       favoriteSet,
+//       qtyDrafts,
+//       isListBusy,
+//       onOpenPreview,
+//       onToggleFavorite,
+//       onEditProduct,
+//       onDeleteProduct,
+//       onQtyDraftChange,
+//       onAddToCurrentList,
+//     ]
+//   );
+
+  
+//   return (
+//     <div className="products-virtual-shell" ref={viewportRef}>
+//       {gridWidth > 0 ? (
+//         <List
+//           style={{ width: gridWidth, height: gridHeight }}
+//           rowComponent={Row}
+//           rowCount={rowCount}
+//           rowHeight={rowHeight}
+//           rowProps={rowProps}
+//           overscanCount={2}
+//           onRowsRendered={onRowsRendered}
+//         >
+//           {isLoadingMoreProducts ? <div className="products-list-overlay" /> : null}
+//         </List>
+//       ) : null}
+//     </div>
+//   );
+// }
+
 function App() {
-  const sessionId = useWorkspaceStore((state) => state.sessionId);
-  const setSessionId = useWorkspaceStore((state) => state.setSessionId);
   const activeListId = useWorkspaceStore((state) => state.activeListId);
   const setActiveListId = useWorkspaceStore((state) => state.setActiveListId);
   const favoriteProductIds = useWorkspaceStore((state) => state.favoriteProductIds);
   const setFavoriteProductIds = useWorkspaceStore((state) => state.setFavoriteProductIds);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [isLoadingAllProducts, setIsLoadingAllProducts] = useState(false);
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const savedTheme = localStorage.getItem(THEME_KEY);
@@ -216,7 +464,7 @@ function App() {
   });
 
   const [categories, setCategories] = useState<Category[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  // const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
@@ -229,12 +477,14 @@ function App() {
     }
   });
 
+
+
   const [activeLists, setActiveLists] = useState<ShoppingList[]>([]);
   const [historyLists, setHistoryLists] = useState<ShoppingList[]>([]);
   const [listItems, setListItems] = useState<ListItem[]>([]);
   const [drawerTab, setDrawerTab] = useState<'list' | 'history'>('list');
 
-  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  // const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCategorySheetOpen, setIsCategorySheetOpen] = useState(false);
   const [isListBusy, setIsListBusy] = useState(false);
@@ -249,7 +499,30 @@ function App() {
 
   const [previewProduct, setPreviewProduct] = useState<Product | null>(null);
   const [previewQty, setPreviewQty] = useState('1');
+  const [showFrequentModal, setShowFrequentModal] = useState(false);
   const [productQtyDrafts, setProductQtyDrafts] = useState<Record<number, string>>({});
+
+  const [catalogDesktopColumns, setCatalogDesktopColumns] = useState<1 | 2 | 3 | 4 | 5>(() => {
+    const saved = Number(localStorage.getItem(CATALOG_DESKTOP_COLUMNS_KEY));
+    return saved === 1 || saved === 2 || saved === 3 || saved === 4 || saved === 5 ? saved : 4;
+  });
+  const [catalogMobileColumns, setCatalogMobileColumns] = useState<1 | 2 | 3 | 4 | 5>(() => {
+    const saved = Number(localStorage.getItem(CATALOG_MOBILE_COLUMNS_KEY));
+    return saved === 1 || saved === 2 || saved === 3 || saved === 4 || saved === 5 ? saved : 2;
+  });
+  const [isCatalogCompact, setIsCatalogCompact] = useState(() => localStorage.getItem(CATALOG_COMPACT_KEY) === '1');
+  const [isCatalogSettingsOpen, setIsCatalogSettingsOpen] = useState(false);
+  const [isImportingJson, setIsImportingJson] = useState(false);
+
+  // const [hasMoreProducts, setHasMoreProducts] = useState(true);
+  // const [isLoadingMoreProducts, setIsLoadingMoreProducts] = useState(false);
+  // const isProductsFetchPendingRef = useRef(false);
+  // const pendingOffsetRef = useRef(0);
+  const searchRef = useRef(search);
+  // const lastSearchRef = useRef('');
+
+
+  
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>({
     isOpen: false,
     title: '',
@@ -272,6 +545,27 @@ function App() {
 
   const flatCategories = useMemo(() => flattenCategories(categories), [categories]);
   const favoriteSet = useMemo(() => new Set(favoriteProductIds), [favoriteProductIds]);
+  const debouncedSearch = useDebounce(search, 300);
+  
+  const {
+    products,
+    hasMoreProducts,
+    isLoadingProducts,
+    isLoadingMoreProducts,
+    loadMoreProducts,
+    refreshProducts,   // 👈 добавить
+    removeProduct,
+  } = useProducts({
+    search: debouncedSearch,
+    selectedCategoryId,
+    showFavoritesOnly,
+    favoriteProductIds,
+  });
+
+  // Синхронизируем searchRef с debouncedSearch для использования в loadProducts
+  useEffect(() => {
+    searchRef.current = debouncedSearch;
+  }, [debouncedSearch]);
 
   const cartCount = useMemo(
     () => listItems.reduce((acc, item) => acc + item.quantity, 0),
@@ -302,77 +596,140 @@ function App() {
     [activeLists, activeListId]
   );
 
-  const handleSessionFromHeaders = useCallback(
-    (headers: Record<string, unknown>) => {
-      const nextSession = typeof headers['x-session-id'] === 'string' ? headers['x-session-id'] : '';
-      if (nextSession && nextSession !== sessionId) {
-        setSessionId(nextSession);
-      }
-    },
-    [sessionId, setSessionId]
-  );
-
-  const apiRequest = useCallback(
-    async <T,>(config: AxiosRequestConfig): Promise<T> => {
-      const response = await axios.request<T>({
-        ...config,
-        url: `${API_BASE}${config.url || ''}`,
-        headers: {
-          ...(config.headers || {}),
-          'X-Session-Id': sessionId,
-        },
-      });
-
-      handleSessionFromHeaders(response.headers as Record<string, unknown>);
-      return response.data;
-    },
-    [sessionId, handleSessionFromHeaders]
-  );
-
   const loadCategories = useCallback(async () => {
-    const data = await apiRequest<Category[]>({ url: '/categories' });
-    setCategories(data);
-  }, [apiRequest]);
+    const { getCategoriesTree } = await import('./db/dbService');
+    const data = await getCategoriesTree();
+    setCategories(data as unknown as Category[]);
+  }, []);
 
-  const loadProducts = useCallback(async () => {
-    setIsLoadingProducts(true);
-    try {
-      const params: Record<string, string | number> = {};
-      if (search.trim()) {
-        params.search = search.trim();
-      }
-      if (selectedCategoryId) {
-        params.category_id = selectedCategoryId;
-      }
+  // const loadProducts = useCallback(async (mode: 'reset' | 'append' = 'reset') => {
+  //   if (isProductsFetchPendingRef.current) {
+  //     return;
+  //   }
 
-      const data = await apiRequest<Product[]>({ url: '/products', params });
-      setProducts(data);
-    } catch {
-      toast.error('Не удалось загрузить товары');
-    } finally {
-      setIsLoadingProducts(false);
-    }
-  }, [apiRequest, search, selectedCategoryId]);
+  //   // В режиме избранного не загружаем новые товары
+  //   if (showFavoritesOnly) {
+  //     return;
+  //   }
+
+  //   if (mode === 'append' && !hasMoreProducts) {
+  //     return;
+  //   }
+
+  //   isProductsFetchPendingRef.current = true;
+  //   if (mode === 'append') {
+  //     setIsLoadingMoreProducts(true);
+  //   } else {
+  //     setIsLoadingProducts(true);
+  //   }
+
+  //   try {
+  //     const currentOffset = mode === 'append' ? pendingOffsetRef.current : 0;
+  //     const params: Record<string, string | number> = {
+  //       limit: PRODUCTS_PAGE_SIZE,
+  //       offset: currentOffset,
+  //     };
+  //     // При включенном избранном поиск не используется
+  //     const currentSearch = showFavoritesOnly ? '' : searchRef.current.trim();
+  //     if (currentSearch) {
+  //       params.search = currentSearch;
+  //     }
+  //     if (selectedCategoryId && !currentSearch) {
+  //       params.category_id = selectedCategoryId;
+  //     }
+
+  //     const data = await apiRequest<{ items: Product[]; hasMore: boolean }>({ url: '/products', params });
+
+  //     if (mode === 'append') {
+  //       setProducts((prev) => [...prev, ...data.items]);
+  //       pendingOffsetRef.current = currentOffset + data.items.length;
+  //       // Сбрасываем ref чтобы разрешить следующую подгрузку
+  //       lastLoadMoreRowRef.current = -1;
+  //     } else {
+  //       setProducts(data.items);
+  //       pendingOffsetRef.current = data.items.length;
+  //     }
+
+  //     setHasMoreProducts(data.hasMore);
+  //   } catch {
+  //     toast.error('Не удалось загрузить товары');
+  //   } finally {
+  //     isProductsFetchPendingRef.current = false;
+  //     setIsLoadingProducts(false);
+  //     setIsLoadingMoreProducts(false);
+  //   }
+  // }, [apiRequest, selectedCategoryId, hasMoreProducts, showFavoritesOnly]);
+
+  // const loadMoreProducts = useCallback(() => {
+  //   void loadProducts('append');
+  // }, [loadProducts]);
 
   const loadLists = useCallback(
     async (status: 'active' | 'completed') => {
-      return apiRequest<ShoppingList[]>({ url: '/lists', params: { status } });
+      const { getShoppingLists } = await import('./db/dbService');
+      const data = await getShoppingLists(status);
+      return data.map((r) => ({
+        id: r.id!,
+        session_id: '',
+        name: r.name,
+        status: r.status,
+        completed_at: r.completed_at,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+      })) as ShoppingList[];
     },
-    [apiRequest]
+    []
   );
 
   const loadItemsForList = useCallback(
     async (listId: number) => {
-      const data = await apiRequest<ListItem[]>({ url: `/lists/${listId}/items` });
-      setListItems(data);
+      const { getListItems, getProducts } = await import('./db/dbService');
+      const records = await getListItems(listId);
+      const allProducts = await getProducts({ limit: 10000, offset: 0 });
+      const productsMap = new Map<number, Product>();
+      for (const p of allProducts.items) {
+        productsMap.set(p.id!, {
+          id: p.id!,
+          name: p.name,
+          price: p.price,
+          unit: p.unit,
+          image_url: p.image_url,
+          category_id: p.category_id ?? 0,
+          is_custom: p.is_custom,
+          created_at: p.created_at,
+        });
+      }
+
+      const items: ListItem[] = records.map((r) => {
+        const product = productsMap.get(r.product_id) || {
+          id: r.product_id,
+          name: 'Товар удалён',
+          price: null,
+          unit: 'шт',
+          image_url: null,
+          category_id: 0,
+          is_custom: false,
+          created_at: '',
+        };
+        return {
+          id: r.id!,
+          list_id: r.list_id,
+          product_id: r.product_id,
+          quantity: r.quantity,
+          note: r.note,
+          product,
+        };
+      });
+      setListItems(items);
     },
-    [apiRequest]
+    []
   );
 
   const refreshFavorites = useCallback(async () => {
-    const data = await apiRequest<number[]>({ url: '/favorites' });
+    const { getFavorites } = await import('./db/dbService');
+    const data = await getFavorites();
     setFavoriteProductIds(data);
-  }, [apiRequest, setFavoriteProductIds]);
+  }, [setFavoriteProductIds]);
 
   const refreshLists = useCallback(async () => {
     try {
@@ -380,29 +737,100 @@ function App() {
       let nextActive = active;
 
       if (nextActive.length === 0) {
-        const created = await apiRequest<ShoppingList>({
-          url: '/lists',
-          method: 'POST',
-          data: { name: 'Основной' },
-        });
-        nextActive = [created];
+        const { createShoppingList } = await import('./db/dbService');
+        const created = await createShoppingList('Основной');
+        nextActive = [{
+          id: created.id!,
+          session_id: '',
+          name: created.name,
+          status: created.status,
+          completed_at: created.completed_at,
+          created_at: created.created_at,
+          updated_at: created.updated_at,
+        }];
       }
 
       setActiveLists(nextActive);
       setHistoryLists(completed);
 
-      if (!activeListId || !nextActive.some((list) => list.id === activeListId)) {
+      if (!activeListId || !nextActive.some((list: ShoppingList) => list.id === activeListId)) {
         setActiveListId(nextActive[0].id);
       }
     } catch {
       toast.error('Не удалось загрузить списки');
     }
-  }, [loadLists, apiRequest, activeListId, setActiveListId]);
+  }, [loadLists, activeListId, setActiveListId]);
+
+  // Учёт частоты использования товара
+  const incrementUsage = useCallback((productId: number) => {
+    const key = 'santex_product_usage';
+    const raw = localStorage.getItem(key);
+    const usage = raw ? JSON.parse(raw) : {};
+    usage[productId] = (usage[productId] || 0) + 1;
+    localStorage.setItem(key, JSON.stringify(usage));
+  }, []);
+
+  const getFrequentProducts = useCallback(() => {
+    const key = 'santex_product_usage';
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const usage = JSON.parse(raw);
+    const sorted = Object.entries(usage)
+      .map(([id, count]) => ({ id: Number(id), count: Number(count) }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+    const productsList = sorted
+      .map(entry => allProducts.find(p => p.id === entry.id))
+      .filter(Boolean) as Product[];
+    return productsList;
+  }, [allProducts]);
+
+  // Загрузка всех продуктов для функции "Часто используемые"
+  useEffect(() => {
+    let cancelled = false;
+    const loadAll = async () => {
+      setIsLoadingAllProducts(true);
+      try {
+        const { db } = await import('./db/database');
+        const records = await db.products.orderBy('created_at').reverse().toArray();
+        if (!cancelled) {
+          setAllProducts(records.map((r) => ({
+            id: r.id!,
+            name: r.name,
+            price: r.price,
+            unit: r.unit,
+            image_url: r.image_url,
+            category_id: r.category_id ?? 0,
+            is_custom: r.is_custom,
+            created_at: r.created_at,
+          })));
+        }
+      } catch {
+        // silently ignore
+      } finally {
+        if (!cancelled) setIsLoadingAllProducts(false);
+      }
+    };
+    void loadAll();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(THEME_KEY, theme);
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem(CATALOG_DESKTOP_COLUMNS_KEY, String(catalogDesktopColumns));
+  }, [catalogDesktopColumns]);
+
+  useEffect(() => {
+    localStorage.setItem(CATALOG_MOBILE_COLUMNS_KEY, String(catalogMobileColumns));
+  }, [catalogMobileColumns]);
+
+  useEffect(() => {
+    localStorage.setItem(CATALOG_COMPACT_KEY, isCatalogCompact ? '1' : '0');
+  }, [isCatalogCompact]);
 
   useEffect(() => {
     localStorage.setItem(EXPANDED_KEY, JSON.stringify(expandedCategoryIds));
@@ -412,17 +840,38 @@ function App() {
     void loadCategories();
   }, [loadCategories]);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      void loadProducts();
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [loadProducts]);
+  // Сбрасываем offset и lastLoadMoreRowRef при смене категории или режима избранного
+  // useEffect(() => {
+  //   setHasMoreProducts(true);
+  //   pendingOffsetRef.current = 0;
+  //   lastLoadMoreRowRef.current = -1;
+  // }, [selectedCategoryId, showFavoritesOnly]);
+
+  // Загружаем продукты при изменении поиска (без сброса offset)
+  // useEffect(() => {
+  //   // Предотвращаем дублирующие запросы
+  //   if (lastSearchRef.current === debouncedSearch) {
+  //     return;
+  //   }
+  //   lastSearchRef.current = debouncedSearch;
+    
+  //   if (debouncedSearch) {
+  //     pendingOffsetRef.current = 0;
+  //     setHasMoreProducts(true);
+  //   }
+  //   void loadProducts();
+  // }, [loadProducts, debouncedSearch]);
+
+  // Загружаем продукты при смене категории
+  // useEffect(() => {
+  //   lastLoadMoreRowRef.current = -1;
+  //   void loadProducts();
+  // }, [loadProducts, selectedCategoryId]);
 
   useEffect(() => {
     void refreshLists();
     void refreshFavorites();
-  }, [refreshLists, refreshFavorites]);
+  }, []);
 
   useEffect(() => {
     if (!activeListId) {
@@ -451,19 +900,12 @@ function App() {
 
     const migrate = async () => {
       try {
+        const { addListItem } = await import('./db/dbService');
         const parsed = JSON.parse(legacyRaw) as Record<string, { product?: Product; qty?: number }>;
         const values = Object.values(parsed).filter((item) => item.product?.id && item.qty && item.qty > 0);
 
         for (const item of values) {
-          await apiRequest<ListItem[]>({
-            url: `/lists/${activeListId}/items`,
-            method: 'POST',
-            data: {
-              productId: item.product?.id,
-              quantity: item.qty,
-              note: null,
-            },
-          });
+          await addListItem(activeListId, item.product!.id, item.qty!, null);
         }
 
         if (!cancelled) {
@@ -482,7 +924,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeListId, apiRequest, loadItemsForList]);
+  }, [activeListId, loadItemsForList]);
 
   const openCreateProductModal = useCallback(() => {
     setEditingProduct(null);
@@ -498,14 +940,13 @@ function App() {
     setEditingProduct(product);
     setProductForm({
       name: product.name,
-      sku: product.sku || '',
       price: product.price === null ? '' : String(product.price),
       unit: product.unit,
       categoryId: String(product.category_id),
       newCategoryName: '',
       newCategoryParentId: '',
       imageFile: null,
-      imageUrl: '',
+      imageUrl: product.image_url || '',
     });
     setImagePreview(getImageUrl(product.image_url));
     setIsProductModalOpen(true);
@@ -527,16 +968,10 @@ function App() {
 
       setIsListBusy(true);
       try {
-        const data = await apiRequest<ListItem[]>({
-          url: `/lists/${activeListId}/items`,
-          method: 'POST',
-          data: {
-            productId: product.id,
-            quantity,
-            note,
-          },
-        });
-        setListItems(data);
+        const { addListItem } = await import('./db/dbService');
+        await addListItem(activeListId, product.id, quantity, note);
+        await loadItemsForList(activeListId);
+        incrementUsage(product.id);
         toast.success('Товар добавлен в список');
       } catch {
         toast.error('Не удалось добавить товар');
@@ -544,7 +979,7 @@ function App() {
         setIsListBusy(false);
       }
     },
-    [activeListId, apiRequest]
+    [activeListId, loadItemsForList, incrementUsage]
   );
 
   const updateListItem = useCallback(
@@ -553,14 +988,11 @@ function App() {
         return;
       }
 
-      const data = await apiRequest<ListItem[]>({
-        url: `/lists/${activeListId}/items/${itemId}`,
-        method: 'PUT',
-        data: payload,
-      });
-      setListItems(data);
+      const { updateListItem: updateListItemDb } = await import('./db/dbService');
+      await updateListItemDb(itemId, activeListId, payload);
+      await loadItemsForList(activeListId);
     },
-    [activeListId, apiRequest]
+    [activeListId, loadItemsForList]
   );
 
   const deleteListItem = useCallback(
@@ -569,31 +1001,30 @@ function App() {
         return;
       }
 
-      await apiRequest<void>({
-        url: `/lists/${activeListId}/items/${itemId}`,
-        method: 'DELETE',
-      });
-      setListItems((prev) => prev.filter((item) => item.id !== itemId));
+      const { deleteListItem: deleteListItemDb } = await import('./db/dbService');
+      await deleteListItemDb(itemId, activeListId);
+      await loadItemsForList(activeListId);
     },
-    [activeListId, apiRequest]
+    [activeListId, loadItemsForList]
   );
 
   const toggleFavorite = useCallback(
     async (productId: number) => {
       const isFavorite = favoriteSet.has(productId);
       try {
+        const { addFavorite, removeFavorite } = await import('./db/dbService');
         if (isFavorite) {
-          await apiRequest<void>({ url: `/favorites/${productId}`, method: 'DELETE' });
+          await removeFavorite(productId);
           setFavoriteProductIds(favoriteProductIds.filter((id) => id !== productId));
         } else {
-          await apiRequest({ url: '/favorites', method: 'POST', data: { productId } });
+          await addFavorite(productId);
           setFavoriteProductIds([...favoriteProductIds, productId]);
         }
       } catch {
         toast.error('Не удалось обновить избранное');
       }
     },
-    [apiRequest, favoriteSet, favoriteProductIds, setFavoriteProductIds]
+    [favoriteSet, favoriteProductIds, setFavoriteProductIds]
   );
 
   const openConfirmDialog = useCallback(
@@ -669,17 +1100,14 @@ function App() {
     }
 
     try {
-      await apiRequest<ShoppingList>({
-        url: `/lists/${activeList.id}`,
-        method: 'PUT',
-        data: { name: nextName },
-      });
+      const { updateShoppingList } = await import('./db/dbService');
+      await updateShoppingList(activeList.id, nextName);
       await refreshLists();
       toast.success('Список переименован');
     } catch {
       toast.error('Не удалось переименовать список');
     }
-  }, [activeList, apiRequest, refreshLists, openPromptDialog]);
+  }, [activeList, refreshLists, openPromptDialog]);
 
   const createNewList = useCallback(async () => {
     const rawName = await openPromptDialog({
@@ -695,18 +1123,15 @@ function App() {
 
     const name = rawName.trim() || 'Новый список';
     try {
-      const created = await apiRequest<ShoppingList>({
-        url: '/lists',
-        method: 'POST',
-        data: { name },
-      });
+      const { createShoppingList } = await import('./db/dbService');
+      const created = await createShoppingList(name);
       await refreshLists();
-      setActiveListId(created.id);
+      setActiveListId(created.id!);
       toast.success('Новый список создан');
     } catch {
       toast.error('Не удалось создать список');
     }
-  }, [apiRequest, refreshLists, setActiveListId, openPromptDialog]);
+  }, [refreshLists, setActiveListId, openPromptDialog]);
 
   const deleteActiveList = useCallback(async () => {
     if (!activeList) {
@@ -724,16 +1149,14 @@ function App() {
     }
 
     try {
-      await apiRequest<void>({
-        url: `/lists/${activeList.id}`,
-        method: 'DELETE',
-      });
+      const { deleteShoppingList } = await import('./db/dbService');
+      await deleteShoppingList(activeList.id);
       await refreshLists();
       toast.success('Список удалён');
     } catch {
       toast.error('Не удалось удалить список');
     }
-  }, [activeList, apiRequest, refreshLists, openConfirmDialog]);
+  }, [activeList, refreshLists, openConfirmDialog]);
 
   const completeCurrentList = useCallback(async () => {
     if (!activeListId) {
@@ -741,28 +1164,40 @@ function App() {
     }
 
     try {
-      const data = await apiRequest<{ completedList: ShoppingList; activeList: ShoppingList }>({
-        url: `/lists/${activeListId}/complete`,
-        method: 'POST',
-      });
-      setActiveListId(data.activeList.id);
+      const { completeShoppingList } = await import('./db/dbService');
+      const data = await completeShoppingList(activeListId);
+      setActiveListId(data.activeList.id!);
       await refreshLists();
       setDrawerTab('history');
       toast.success('Список завершён и перенесён в историю');
     } catch {
       toast.error('Не удалось завершить список');
     }
-  }, [activeListId, apiRequest, refreshLists, setActiveListId]);
+  }, [activeListId, refreshLists, setActiveListId]);
 
   const restoreFromHistory = useCallback(
     async (listId: number) => {
       try {
-        const data = await apiRequest<{ list: ShoppingList; items: ListItem[] }>({
-          url: `/lists/${listId}/restore`,
-          method: 'POST',
-        });
-        setActiveListId(data.list.id);
-        setListItems(data.items);
+        const { restoreShoppingList } = await import('./db/dbService');
+        const data = await restoreShoppingList(listId);
+        setActiveListId(data.list.id!);
+        setListItems(data.items.map((r) => ({
+          id: r.id!,
+          list_id: r.list_id,
+          product_id: r.product_id,
+          quantity: r.quantity,
+          note: r.note,
+          product: {
+            id: r.product_id,
+            name: 'Загрузка...',
+            price: null,
+            unit: 'шт',
+            image_url: null,
+            category_id: 0,
+            is_custom: false,
+            created_at: '',
+          },
+        })));
         setDrawerTab('list');
         await refreshLists();
         toast.success('Заказ восстановлен в новый список');
@@ -770,7 +1205,7 @@ function App() {
         toast.error('Не удалось восстановить заказ');
       }
     },
-    [apiRequest, refreshLists, setActiveListId]
+    [refreshLists, setActiveListId]
   );
 
   const clearCurrentList = useCallback(async () => {
@@ -789,22 +1224,18 @@ function App() {
     }
 
     try {
+      const { deleteListItem: deleteListItemDb } = await import('./db/dbService');
       await Promise.all(
-        listItems.map((item) =>
-          apiRequest<void>({
-            url: `/lists/${activeListId}/items/${item.id}`,
-            method: 'DELETE',
-          })
-        )
+        listItems.map((item) => deleteListItemDb(item.id, activeListId))
       );
       setListItems([]);
       toast.success('Список очищен');
     } catch {
       toast.error('Не удалось очистить список');
     }
-  }, [activeListId, listItems, apiRequest, openConfirmDialog]);
+  }, [activeListId, listItems, openConfirmDialog]);
 
-  const exportCartToTxt = useCallback(() => {
+  const exportCartToTxt = useCallback(async () => {
     if (listItems.length === 0) {
       toast.error('Список пустой');
       return;
@@ -816,19 +1247,12 @@ function App() {
       `Список: ${activeList?.name || 'Без названия'}`,
       '',
       ...listItems.map((item) => {
-        const priceValue = item.product.price;
-        const hasPrice = typeof priceValue === 'number';
-        const amount = hasPrice ? priceValue * item.quantity : null;
         const noteValue = normalizeOptionalText(item.note);
-        const skuValue = normalizeOptionalText(item.product.sku);
         const notePart = noteValue ? ` (${noteValue})` : '';
 
         return [
           `${item.product.name}${notePart}`,
-          skuValue ? `Арт: ${skuValue}` : null,
           `Кол-во: ${formatQuantity(item.quantity)} ${item.product.unit}`,
-          hasPrice ? `Цена: ${priceValue} ₽ / ${item.product.unit}` : null,
-          hasPrice && amount !== null ? `Сумма: ${amount.toFixed(2)} ₽` : null,
         ]
           .filter(Boolean)
           .join(' | ');
@@ -837,15 +1261,70 @@ function App() {
       `Позиции: ${listItems.length}`,
     ];
 
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const text = lines.join('\n');
+    const fileName = `${activeList?.name || 'santex-list'}.txt`;
+
+    // На мобильных устройствах предложить поделиться
+    if (navigator.share && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+      try {
+        await navigator.share({
+          title: 'Список покупок',
+          text: text,
+        });
+        toast.success('Текст готов к вставке');
+        return;
+      } catch (shareError) {
+        // Если пользователь отменил или share не удался — идём дальше
+        console.log('Share отменён', shareError);
+      }
+    }
+
+    // Запасной вариант: скачать файл
+    const blob = new Blob([text], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `${activeList?.name || 'santex-list'}.txt`;
+    anchor.download = fileName;
     anchor.click();
     URL.revokeObjectURL(url);
-    toast.success('TXT экспортирован');
+    toast.success('Файл сохранён. Откройте его из папки Загрузки');
   }, [listItems, activeList]);
+
+  const handleImportJson = useCallback(async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+
+      setIsImportingJson(true);
+      try {
+        const result = await importPwaExport(file);
+        toast.success(`Импорт завершён: ${result.products} товаров, ${result.categories} категорий`);
+        // Перезагружаем данные
+        await loadCategories();
+        const { db } = await import('./db/database');
+        const records = await db.products.orderBy('created_at').reverse().toArray();
+        setAllProducts(records.map((r) => ({
+          id: r.id!,
+          name: r.name,
+          price: r.price,
+          unit: r.unit,
+          image_url: r.image_url,
+          category_id: r.category_id ?? 0,
+          is_custom: r.is_custom,
+          created_at: r.created_at,
+        })));
+      } catch (error) {
+        console.error('Import error:', error);
+        toast.error(error instanceof Error ? error.message : 'Ошибка импорта');
+      } finally {
+        setIsImportingJson(false);
+      }
+    };
+    input.click();
+  }, [loadCategories, setAllProducts]);
 
   const editItemNote = useCallback(
     async (item: ListItem) => {
@@ -888,14 +1367,11 @@ function App() {
       try {
         let categoryId = productForm.categoryId;
         if (productForm.newCategoryName.trim()) {
-          const createdCategory = await apiRequest<Category>({
-            url: '/categories',
-            method: 'POST',
-            data: {
-              name: productForm.newCategoryName.trim(),
-              parent_id: productForm.newCategoryParentId ? Number(productForm.newCategoryParentId) : null,
-            },
-          });
+          const { createCategory } = await import('./db/dbService');
+          const createdCategory = await createCategory(
+            productForm.newCategoryName.trim(),
+            productForm.newCategoryParentId ? Number(productForm.newCategoryParentId) : null
+          );
           categoryId = String(createdCategory.id);
           await loadCategories();
         }
@@ -905,40 +1381,40 @@ function App() {
           return;
         }
 
-        const formData = new FormData();
-        formData.append('name', productForm.name.trim());
-        formData.append('sku', productForm.sku.trim());
-        formData.append('price', productForm.price.trim());
-        formData.append('unit', productForm.unit.trim() || 'шт');
-        formData.append('category_id', categoryId);
-
-        if (!editingProduct) {
-          formData.append('is_custom', 'true');
-        }
-
+        let imageUrl: string | null = null;
         if (productForm.imageFile) {
-          formData.append('image', productForm.imageFile);
+          imageUrl = await readFileAsDataURL(productForm.imageFile);
+        } else if (productForm.imageUrl.trim()) {
+          imageUrl = productForm.imageUrl.trim();
         }
+
+        const productData = {
+          name: productForm.name.trim(),
+          sku: null as string | null,
+          price: productForm.price.trim() ? Number(productForm.price) : null,
+          unit: productForm.unit.trim() || 'шт',
+          image_url: imageUrl,
+          category_id: Number(categoryId),
+          is_custom: !editingProduct,
+        };
 
         if (editingProduct) {
-          await apiRequest({
-            url: `/products/${editingProduct.id}`,
-            method: 'PUT',
-            data: formData,
-          });
+          const { updateProduct } = await import('./db/dbService');
+          await updateProduct(editingProduct.id, productData);
           toast.success('Товар обновлён');
         } else {
-          await apiRequest({ url: '/products', method: 'POST', data: formData });
+          const { createProduct } = await import('./db/dbService');
+          await createProduct(productData);
           toast.success('Товар добавлен');
         }
 
         closeProductModal();
-        await loadProducts();
+        await refreshProducts();
       } catch {
         toast.error('Не удалось сохранить товар');
       }
     },
-    [productForm, editingProduct, apiRequest, loadCategories, closeProductModal, loadProducts]
+    [productForm, editingProduct, loadCategories, closeProductModal, refreshProducts]
   );
 
   const deleteProduct = useCallback(
@@ -954,16 +1430,17 @@ function App() {
       }
 
       try {
-        await apiRequest({ url: `/products/${product.id}`, method: 'DELETE' });
-        toast.success('Товар удалён');
-        await loadProducts();
+        const { deleteProduct: deleteProductDb } = await import('./db/dbService');
+        await deleteProductDb(product.id);
+        removeProduct(product.id);
         setListItems((prev) => prev.filter((item) => item.product_id !== product.id));
         setFavoriteProductIds(favoriteProductIds.filter((id) => id !== product.id));
+        toast.success('Товар удалён');
       } catch {
         toast.error('Ошибка удаления');
       }
     },
-    [apiRequest, loadProducts, favoriteProductIds, setFavoriteProductIds, openConfirmDialog]
+    [favoriteProductIds, setFavoriteProductIds, openConfirmDialog]
   );
 
   const openCategoryCreateModal = useCallback(() => {
@@ -991,24 +1468,19 @@ function App() {
 
       try {
         if (categoryForm.id) {
-          await apiRequest({
-            url: `/categories/${categoryForm.id}`,
-            method: 'PUT',
-            data: {
-              name: categoryForm.name.trim(),
-              parent_id: categoryForm.parentId ? Number(categoryForm.parentId) : null,
-            },
-          });
+          const { updateCategory } = await import('./db/dbService');
+          await updateCategory(
+            categoryForm.id,
+            categoryForm.name.trim(),
+            categoryForm.parentId ? Number(categoryForm.parentId) : null
+          );
           toast.success('Категория обновлена');
         } else {
-          await apiRequest({
-            url: '/categories',
-            method: 'POST',
-            data: {
-              name: categoryForm.name.trim(),
-              parent_id: categoryForm.parentId ? Number(categoryForm.parentId) : null,
-            },
-          });
+          const { createCategory } = await import('./db/dbService');
+          await createCategory(
+            categoryForm.name.trim(),
+            categoryForm.parentId ? Number(categoryForm.parentId) : null
+          );
           toast.success('Категория создана');
         }
 
@@ -1018,7 +1490,7 @@ function App() {
         toast.error('Не удалось сохранить категорию');
       }
     },
-    [categoryForm, apiRequest, loadCategories]
+    [categoryForm, loadCategories]
   );
 
   const deleteCategory = useCallback(
@@ -1034,17 +1506,18 @@ function App() {
       }
 
       try {
-        await apiRequest({ url: `/categories/${category.id}`, method: 'DELETE' });
+        const { deleteCategory: deleteCategoryDb } = await import('./db/dbService');
+        await deleteCategoryDb(category.id);
         toast.success('Категория удалена');
         if (selectedCategoryId === category.id) {
           setSelectedCategoryId(null);
         }
-        await Promise.all([loadCategories(), loadProducts()]);
+        await Promise.all([loadCategories(), refreshProducts()]);
       } catch {
         toast.error('Не удалось удалить категорию');
       }
     },
-    [apiRequest, selectedCategoryId, loadCategories, loadProducts, openConfirmDialog]
+    [selectedCategoryId, loadCategories, refreshProducts, openConfirmDialog]
   );
 
   useEffect(() => {
@@ -1077,6 +1550,8 @@ function App() {
           closeProductModal();
         } else if (isCategoryModalOpen) {
           setIsCategoryModalOpen(false);
+        } else if (isCatalogSettingsOpen) {
+          setIsCatalogSettingsOpen(false);
         } else if (isCartOpen) {
           setIsCartOpen(false);
         } else if (isCategorySheetOpen) {
@@ -1118,6 +1593,72 @@ function App() {
     closeProductModal,
     openCreateProductModal,
     deleteActiveList,
+  ]);
+
+  const isAnyModalOpen = useMemo(() => {
+    return isCartOpen ||
+           previewProduct !== null ||
+           isProductModalOpen ||
+           isCategoryModalOpen ||
+           isCatalogSettingsOpen ||
+           isCategorySheetOpen ||
+           showFrequentModal ||
+           confirmDialog.isOpen ||
+           promptDialog.isOpen ||
+           showFavoritesOnly;
+  }, [
+    isCartOpen,
+    previewProduct,
+    isProductModalOpen,
+    isCategoryModalOpen,
+    isCatalogSettingsOpen,
+    isCategorySheetOpen,
+    showFrequentModal,
+    confirmDialog.isOpen,
+    promptDialog.isOpen,
+    showFavoritesOnly,
+  ]);
+
+  const pushModalState = useCallback(() => {
+    if (!isAnyModalOpen) return;
+    window.history.pushState({ modalOpen: true }, '');
+  }, [isAnyModalOpen]);
+
+  useEffect(() => {
+    if (isAnyModalOpen) {
+      pushModalState();
+    }
+  }, [isAnyModalOpen, pushModalState]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      if (isCartOpen) setIsCartOpen(false);
+      if (previewProduct) setPreviewProduct(null);
+      if (isProductModalOpen) closeProductModal();
+      if (isCategoryModalOpen) setIsCategoryModalOpen(false);
+      if (isCatalogSettingsOpen) setIsCatalogSettingsOpen(false);
+      if (isCategorySheetOpen) setIsCategorySheetOpen(false);
+      if (showFrequentModal) setShowFrequentModal(false);
+      if (confirmDialog.isOpen) closeConfirmDialog(false);
+      if (promptDialog.isOpen) closePromptDialog(null);
+      if (showFavoritesOnly) setShowFavoritesOnly(false);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [
+    isCartOpen,
+    previewProduct,
+    isProductModalOpen,
+    isCategoryModalOpen,
+    isCatalogSettingsOpen,
+    isCategorySheetOpen,
+    showFrequentModal,
+    confirmDialog.isOpen,
+    promptDialog.isOpen,
+    showFavoritesOnly,
+    closeProductModal,
+    closeConfirmDialog,
+    closePromptDialog,
   ]);
 
   function toggleExpandedCategory(id: number) {
@@ -1172,47 +1713,60 @@ function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <button className="icon-btn mobile-only" onClick={() => setIsCategorySheetOpen(true)} type="button">
-          <FiMenu />
-        </button>
-        <div className="brand">Сантехнический помощник</div>
-
+        <div className="topbar-row">
+          <button className="icon-btn mobile-only" onClick={() => setIsCategorySheetOpen(true)} type="button">
+            <FiMenu />
+          </button>
+          <div className="brand">Сантехнический помощник</div>
+          <div className="topbar-actions">
+            <button
+              className="btn btn-soft theme-btn"
+              type="button"
+              onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+              aria-label="Переключить тему"
+            >
+              {theme === 'dark' ? <FiSun /> : <FiMoon />}
+            </button>
+            <button
+              className={`btn btn-soft ${showFavoritesOnly ? 'active-filter' : ''}`}
+              type="button"
+              onClick={() => setShowFavoritesOnly((prev) => !prev)}
+            >
+              <FiStar />
+              <span>Избранное</span>
+            </button>
+            <button
+              className="btn btn-soft"
+              type="button"
+              onClick={() => setShowFrequentModal(true)}
+              aria-label="Часто используемые товары"
+            >
+              <FiTrendingUp />
+              <span>Часто</span>
+            </button>
+            <button className="btn btn-primary" type="button" onClick={openCreateProductModal}>
+              <FiPlus />
+              <span>Добавить товар</span>
+            </button>
+            <button className="btn btn-soft cart-btn" type="button" onClick={() => setIsCartOpen(true)}>
+              <FiShoppingCart />
+              <span>{formatQuantity(cartCount)}</span>
+            </button>
+          </div>
+        </div>
         <div className="search-wrap">
           <FiSearch className="search-icon" />
           <input
+            id="product-search"
+            name="search"
             ref={searchInputRef}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             className="search-input"
-            placeholder="Поиск по названию и артикулу"
+            placeholder="Поиск по названию"
+            autoComplete="off"
+            aria-label="Поиск товаров"
           />
-        </div>
-
-        <div className="topbar-actions">
-          <button
-            className="btn btn-soft theme-btn"
-            type="button"
-            onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
-            aria-label="Переключить тему"
-          >
-            {theme === 'dark' ? <FiSun /> : <FiMoon />}
-          </button>
-          <button
-            className={`btn btn-soft ${showFavoritesOnly ? 'active-filter' : ''}`}
-            type="button"
-            onClick={() => setShowFavoritesOnly((prev) => !prev)}
-          >
-            <FiStar />
-            <span>Избранное</span>
-          </button>
-          <button className="btn btn-primary" type="button" onClick={openCreateProductModal}>
-            <FiPlus />
-            <span>Добавить товар</span>
-          </button>
-          <button className="btn btn-soft cart-btn" type="button" onClick={() => setIsCartOpen(true)}>
-            <FiShoppingCart />
-            <span>{formatQuantity(cartCount)}</span>
-          </button>
         </div>
       </header>
 
@@ -1238,93 +1792,49 @@ function App() {
         <section className="content">
           <div className="content-top">
             <h2>{selectedCategoryId ? 'Товары категории' : 'Все товары'}</h2>
-            <div className="products-count">
-              {visibleProducts.length} шт. {showFavoritesOnly ? '• только избранное' : ''}
+            <div className="content-top-actions">
+              <div className="products-count">
+                {visibleProducts.length} шт. {showFavoritesOnly ? '• только избранное' : ''}
+              </div>
+              <button className="btn btn-soft" type="button" onClick={() => setIsCatalogSettingsOpen(true)}>
+                <FiSliders />
+                <span>Вид каталога</span>
+              </button>
             </div>
           </div>
 
-          {isLoadingProducts ? <div className="state-box">Загрузка...</div> : null}
+          {isLoadingProducts && products.length === 0 ? <div className="state-box">Загрузка...</div> : null}
           {!isLoadingProducts && visibleProducts.length === 0 ? (
             <div className="state-box">По вашему запросу ничего не найдено</div>
           ) : null}
 
-          <div className="products-grid">
-            {visibleProducts.map((product) => {
-              const isFavorite = favoriteSet.has(product.id);
-              const qtyDraft = Object.prototype.hasOwnProperty.call(productQtyDrafts, product.id)
-                ? productQtyDrafts[product.id]
-                : '';
-
-              return (
-                <article key={product.id} className="product-card">
-                  <button className="image-action" type="button" onClick={() => openPreview(product)}>
-                    <img src={getImageUrl(product.image_url)} alt={product.name} className="product-image" loading="lazy" />
-                  </button>
-                  <div className="product-body">
-                    <div className="product-top-row">
-                      <h4>{product.name}</h4>
-                      <div className="product-top-actions">
-                        <button className={`icon-btn ghost ${isFavorite ? 'starred' : ''}`} type="button" onClick={() => void toggleFavorite(product.id)}>
-                          <FiStar />
-                        </button>
-                        {product.is_custom ? <span className="badge">custom</span> : null}
-                      </div>
-                    </div>
-                    <p className="sku">Артикул: {product.sku || '—'}</p>
-                    <div className="price-line">
-                      {product.price !== null ? <strong>{formatPrice(product.price)} / {product.unit}</strong> : <strong>{product.unit}</strong>}
-                    </div>
-                    <div className="quick-add-row">
-                      <label className="quantity-input-group">
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={qtyDraft}
-                          placeholder="1"
-                          inputMode="decimal"
-                          onChange={(event) =>
-                            setProductQtyDrafts((prev) => ({
-                              ...prev,
-                              [product.id]: event.target.value,
-                            }))
-                          }
-                          onFocus={(event) => event.currentTarget.select()}
-                        />
-                        <span>{product.unit}</span>
-                      </label>
-                    </div>
-                    <div className="product-footer">
-                      <div className="product-actions">
-                        <button className="icon-btn ghost" type="button" onClick={() => openPreview(product)}>
-                          <FiEye />
-                        </button>
-                        <button className="icon-btn ghost" type="button" onClick={() => openEditProductModal(product)}>
-                          <FiEdit2 />
-                        </button>
-                        <button className="icon-btn danger" type="button" onClick={() => void deleteProduct(product)}>
-                          <FiTrash2 />
-                        </button>
-                      </div>
-                      <button
-                        className="btn btn-primary"
-                        type="button"
-                        disabled={isListBusy}
-                        onClick={() =>
-                          void addToCurrentList(
-                            product,
-                            parsePositiveNumber(qtyDraft, 1)
-                          )
-                        }
-                      >
-                        <FiPlus />
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+          {!isLoadingProducts && visibleProducts.length > 0 ? (
+            <VirtualProductsGrid
+              products={visibleProducts}
+              favoriteSet={favoriteSet}
+              qtyDrafts={productQtyDrafts}
+              isListBusy={isListBusy}
+              isCompact={isCatalogCompact}
+              desktopColumns={catalogDesktopColumns}
+              mobileColumns={catalogMobileColumns}
+              hasMoreProducts={hasMoreProducts}
+              isLoadingMoreProducts={isLoadingMoreProducts}
+              onLoadMoreProducts={loadMoreProducts}
+              onOpenPreview={openPreview}
+              onToggleFavorite={toggleFavorite}
+              onEditProduct={openEditProductModal}
+              onDeleteProduct={deleteProduct}
+              onQtyDraftChange={(productId, value) =>
+                setProductQtyDrafts((prev) => ({
+                  ...prev,
+                  [productId]: value,
+                }))
+              }
+              onAddToCurrentList={addToCurrentList}
+              showFavoritesOnly={showFavoritesOnly}
+            />
+          ) : null}
+          {isLoadingMoreProducts ? <div className="products-load-state">Загрузка ещё товаров...</div> : null}
         </section>
       </main>
 
@@ -1335,7 +1845,7 @@ function App() {
 
       <div className={`drawer-overlay ${isCartOpen ? 'visible' : ''}`} onClick={() => setIsCartOpen(false)} />
       <aside className={`cart-drawer ${isCartOpen ? 'open' : ''}`}>
-        <div className="panel-header">
+        <div className="panel-header" style={{ margin: `${15}px` }}>
           <h3>Черновики и история</h3>
           <button className="icon-btn ghost" type="button" onClick={() => setIsCartOpen(false)}>
             <FiX />
@@ -1513,7 +2023,6 @@ function App() {
               <img src={getImageUrl(previewProduct.image_url)} alt={previewProduct.name} className="preview-image" />
               <div className="preview-body">
                 <h4>{previewProduct.name}</h4>
-                <p>Артикул: {previewProduct.sku || '—'}</p>
                 <p>
                   {previewProduct.price !== null
                     ? `${formatPrice(previewProduct.price)} / ${previewProduct.unit}`
@@ -1569,13 +2078,6 @@ function App() {
                   value={productForm.name}
                   onChange={(event) => setProductForm((prev) => ({ ...prev, name: event.target.value }))}
                   required
-                />
-              </label>
-              <label>
-                Артикул
-                <input
-                  value={productForm.sku}
-                  onChange={(event) => setProductForm((prev) => ({ ...prev, sku: event.target.value }))}
                 />
               </label>
               <label>
@@ -1643,7 +2145,7 @@ function App() {
               ) : null}
 
               <label className="full-row">
-                Изображение
+                Изображение (файл)
                 <input
                   type="file"
                   accept="image/png, image/jpeg, image/gif"
@@ -1651,6 +2153,21 @@ function App() {
                     const file = event.target.files?.[0] || null;
                     setProductForm((prev) => ({ ...prev, imageFile: file }));
                     setImagePreview(file ? URL.createObjectURL(file) : editingProduct ? getImageUrl(editingProduct.image_url) : null);
+                  }}
+                />
+              </label>
+              <label className="full-row">
+                Изображение (URL)
+                <input
+                  type="url"
+                  placeholder="https://example.com/image.jpg"
+                  value={productForm.imageUrl || ''}
+                  onChange={(event) => {
+                    const url = event.target.value;
+                    setProductForm((prev) => ({ ...prev, imageUrl: url }));
+                    if (url.trim()) {
+                      setImagePreview(url.trim());
+                    }
                   }}
                 />
               </label>
@@ -1670,6 +2187,77 @@ function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {isCatalogSettingsOpen ? (
+        <div className="modal-overlay" onClick={() => setIsCatalogSettingsOpen(false)}>
+          <div className="modal compact-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-header">
+              <h3>Настройки каталога</h3>
+              <button className="icon-btn ghost" type="button" onClick={() => setIsCatalogSettingsOpen(false)}>
+                <FiX />
+              </button>
+            </div>
+
+            <div className="settings-block">
+              <h4 className="settings-title">Колонки на десктопе</h4>
+              <div className="settings-options">
+                {[1, 2, 3, 4, 5].map((cols) => (
+                  <button
+                    key={cols}
+                    className={`btn btn-soft ${catalogDesktopColumns === cols ? 'active-filter' : ''}`}
+                    type="button"
+                    onClick={() => setCatalogDesktopColumns(cols as 1 | 2 | 3 | 4 | 5)}
+                  >
+                    {cols}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="settings-block">
+              <h4 className="settings-title">Колонки на мобильном</h4>
+              <div className="settings-options">
+                {[1, 2, 3, 4, 5].map((cols) => (
+                  <button
+                    key={cols}
+                    className={`btn btn-soft ${catalogMobileColumns === cols ? 'active-filter' : ''}`}
+                    type="button"
+                    onClick={() => setCatalogMobileColumns(cols as 1 | 2 | 3 | 4 | 5)}
+                  >
+                    {cols}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="settings-toggle">
+              <span className="settings-hint">Компактный режим</span>
+              <button
+                className={`btn btn-soft ${isCatalogCompact ? 'active-filter' : ''}`}
+                type="button"
+                onClick={() => setIsCatalogCompact((prev) => !prev)}
+              >
+                {isCatalogCompact ? 'Вкл' : 'Выкл'}
+              </button>
+            </div>
+
+            <div className="settings-block">
+              <h4 className="settings-title">Импорт каталога</h4>
+              <p className="settings-hint" style={{ marginBottom: '8px' }}>
+                Загрузите JSON-файл экспорта (pwa-export.json) для добавления товаров и категорий
+              </p>
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={isImportingJson}
+                onClick={handleImportJson}
+              >
+                <FiUpload /> {isImportingJson ? 'Импорт...' : 'Импорт каталога'}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -1786,8 +2374,49 @@ function App() {
           </div>
         </div>
       ) : null}
+
+      {showFrequentModal && (
+        <div className="modal-overlay" onClick={() => setShowFrequentModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="panel-header">
+              <h3>Часто используемые товары</h3>
+              <button className="icon-btn ghost" onClick={() => setShowFrequentModal(false)}>
+                <FiX />
+              </button>
+            </div>
+            {isLoadingAllProducts ? (
+              <div className="state-box">Загрузка...</div>
+            ) : getFrequentProducts().length === 0 ? (
+              <div className="state-box">
+                Нет часто используемых товаров. Добавляйте товары в корзину, и они появятся здесь.
+              </div>
+            ) : (
+              <div className="frequent-products-grid">
+                {getFrequentProducts().map(product => (
+                  <div key={product.id} className="frequent-product-card">
+                    <img src={getImageUrl(product.image_url)} alt={product.name} />
+                    <div className="frequent-product-info">
+                      <div className="frequent-product-name">{product.name}</div>
+                    </div>
+                    <button
+                      className="button button-primary"
+                      onClick={() => {
+                        addToCurrentList(product, 1);
+                        setShowFrequentModal(false);
+                      }}
+                    >
+                      <FiPlus />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 export default App;
+

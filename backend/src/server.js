@@ -7,6 +7,8 @@ const multer = require('multer');
 const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
+const { Readable } = require('stream');
+const csv = require('csv-parser');
 
 const PORT = process.env.PORT || 4000;
 const ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
@@ -23,6 +25,25 @@ fs.mkdirSync(PLACEHOLDERS_DIR, { recursive: true });
 
 const db = new Database(DB_PATH);
 db.pragma('foreign_keys = ON');
+
+// Функция нормализации поискового запроса
+function normalizeSearchQuery(rawSearch) {
+  if (!rawSearch) return '';
+  return rawSearch
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Удаляем диакритические знаки
+    .replace(/[°@#$%^&*()_+=\[\]{};:'"\\|<>!~`]/g, '') // Удаляем специальные символы
+    .replace(/[-/\\_,]/g, ' ') // Заменяем дефисы, слеши, запятые на пробелы
+    .replace(/\s+/g, ' ') // Сжимаем множественные пробелы
+    .trim()
+    .toLowerCase();
+}
+
+// Разбивает запрос на слова для поиска по каждому слову
+function tokenizeSearch(rawSearch) {
+  const normalized = normalizeSearchQuery(rawSearch);
+  return normalized.split(/\s+/).filter(word => word.length > 0);
+}
 
 const placeholderFiles = [
   { fileName: 'pipes.svg', label: 'Трубы', color: '#8ecae6' },
@@ -50,6 +71,13 @@ for (const item of placeholderFiles) {
 function hasTable(name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
 }
+
+// Регистрируем SQL функцию для нормализации текста
+function normalizeText(text) {
+  if (!text || typeof text !== 'string') return '';
+  return normalizeSearchQuery(text);
+}
+db.function('normalize_text', { deterministic: true }, normalizeText);
 
 function ensureBaseSchema() {
   db.exec(`
@@ -168,7 +196,10 @@ function ensureExtendedSchema() {
 
     CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
     CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
+    CREATE INDEX IF NOT EXISTS idx_products_name_sku ON products(name, sku);
     CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id);
+    CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_categories_parent_id ON categories(parent_id);
     CREATE INDEX IF NOT EXISTS idx_lists_session_status ON shopping_lists(session_id, status);
     CREATE INDEX IF NOT EXISTS idx_list_items_list_id ON list_items(list_id);
     CREATE INDEX IF NOT EXISTS idx_favorites_session_id ON favorites(session_id);
@@ -180,7 +211,11 @@ migrateProductsTable();
 ensureExtendedSchema();
 
 function ensureDefaultCategory() {
-  const row = db.prepare('SELECT id FROM categories WHERE name = ? LIMIT 1').get('Без категории');
+  const row = db
+    .prepare(
+      'SELECT id FROM categories WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND parent_id IS NULL LIMIT 1'
+    )
+    .get('Без категории');
   if (row) {
     return row.id;
   }
@@ -237,6 +272,7 @@ function seedInitialData() {
 }
 
 seedInitialData();
+mergeDuplicateCategories();
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
@@ -247,7 +283,7 @@ const storage = multer.diskStorage({
   },
 });
 
-const upload = multer({
+const imageUpload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
@@ -261,12 +297,41 @@ const upload = multer({
   },
 });
 
+const importUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const allowedMime = [
+      'text/csv',
+      'application/csv',
+      'application/vnd.ms-excel',
+      'application/json',
+      'text/json',
+      'text/plain',
+    ];
+
+    if (!['.csv', '.json'].includes(ext) && !allowedMime.includes(file.mimetype)) {
+      cb(new Error('Разрешены только CSV и JSON файлы'));
+      return;
+    }
+
+    cb(null, true);
+  },
+});
+
 const app = express();
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({ origin: ORIGIN }));
 app.use(morgan('dev'));
 app.use(express.json());
 app.use('/uploads', express.static(UPLOADS_DIR));
+
+let categoriesTreeCache = null;
+
+function invalidateCategoriesCache() {
+  categoriesTreeCache = null;
+}
 
 function toCategoryTree(rows) {
   const map = new Map();
@@ -286,8 +351,101 @@ function toCategoryTree(rows) {
   return tree;
 }
 
+function getCategoriesTreeCached() {
+  if (categoriesTreeCache) {
+    return categoriesTreeCache;
+  }
+
+  const rows = db
+    .prepare('SELECT id, name, parent_id FROM categories ORDER BY COALESCE(parent_id, id), name')
+    .all();
+  categoriesTreeCache = toCategoryTree(rows);
+  return categoriesTreeCache;
+}
+
 function getCategoryById(id) {
   return db.prepare('SELECT id, name, parent_id FROM categories WHERE id = ?').get(id);
+}
+
+function isUncategorizedCategory(category) {
+  return Boolean(
+    category &&
+      category.parent_id === null &&
+      String(category.name || '').trim().toLowerCase() === 'без категории'
+  );
+}
+
+function findCategoryByNameAndParent(name, parentId) {
+  if (parentId === null || parentId === undefined) {
+    return db
+      .prepare(
+        'SELECT id, name, parent_id FROM categories WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND parent_id IS NULL ORDER BY id ASC LIMIT 1'
+      )
+      .get(name);
+  }
+
+  return db
+    .prepare(
+      'SELECT id, name, parent_id FROM categories WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND parent_id = ? ORDER BY id ASC LIMIT 1'
+    )
+    .get(name, parentId);
+}
+
+function mergeDuplicateCategories() {
+  const rows = db.prepare('SELECT id, name, parent_id FROM categories ORDER BY id ASC').all();
+  const canonicalByKey = new Map();
+
+  const trx = db.transaction(() => {
+    for (const row of rows) {
+      const normalizedName = String(row.name || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+      const key = `${row.parent_id === null ? 'root' : row.parent_id}:${normalizedName}`;
+
+      if (!canonicalByKey.has(key)) {
+        canonicalByKey.set(key, row.id);
+        continue;
+      }
+
+      const targetId = canonicalByKey.get(key);
+      if (targetId === row.id) {
+        continue;
+      }
+
+      db.prepare('UPDATE products SET category_id = ? WHERE category_id = ?').run(targetId, row.id);
+      db.prepare('UPDATE categories SET parent_id = ? WHERE parent_id = ?').run(targetId, row.id);
+      db.prepare('DELETE FROM categories WHERE id = ?').run(row.id);
+    }
+  });
+
+  trx();
+}
+
+function ensureCategoryPath(parts) {
+  let parentId = null;
+
+  for (const part of parts) {
+    const name = String(part || '').trim();
+    if (!name) {
+      continue;
+    }
+
+    let category = findCategoryByNameAndParent(name, parentId);
+    if (!category) {
+      const created = db.prepare('INSERT INTO categories (name, parent_id) VALUES (?, ?)').run(name, parentId);
+      category = getCategoryById(created.lastInsertRowid);
+      invalidateCategoriesCache();
+    }
+
+    parentId = category.id;
+  }
+
+  if (parentId === null) {
+    parentId = ensureDefaultCategory();
+  }
+
+  return parentId;
 }
 
 function normalizeProduct(row) {
@@ -329,6 +487,102 @@ function parseQuantity(rawQuantity, fallback = 1) {
 function parseUnit(rawUnit) {
   const value = String(rawUnit || '').trim();
   return value || 'шт';
+}
+
+function parseImageUrl(rawValue) {
+  if (rawValue === undefined) {
+    return { provided: false, value: null, error: null };
+  }
+
+  const value = String(rawValue || '').trim();
+  if (!value) {
+    return { provided: true, value: null, error: null };
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { provided: true, value: null, error: 'URL изображения должен начинаться с http:// или https://' };
+    }
+
+    return { provided: true, value: parsed.toString(), error: null };
+  } catch {
+    return { provided: true, value: null, error: 'URL изображения указан некорректно' };
+  }
+}
+
+function parseCsvBuffer(buffer) {
+  return new Promise((resolve, reject) => {
+    const text = buffer.toString('utf-8');
+    const firstLine = text.split(/\r?\n/).find((line) => line.trim()) || '';
+    const commaCount = (firstLine.match(/,/g) || []).length;
+    const semicolonCount = (firstLine.match(/;/g) || []).length;
+    const separator = semicolonCount > commaCount ? ';' : ',';
+    const rows = [];
+
+    Readable.from([buffer])
+      .pipe(
+        csv({
+          separator,
+          mapHeaders: ({ header }) => {
+            if (typeof header !== 'string') {
+              return header;
+            }
+
+            let normalized = header.replace(/^\uFEFF/, '').trim();
+            if (normalized.startsWith('"') && normalized.endsWith('"') && normalized.length >= 2) {
+              normalized = normalized.slice(1, -1).trim();
+            }
+
+            return normalized;
+          },
+        })
+      )
+      .on('data', (row) => rows.push(row))
+      .on('end', () => resolve(rows))
+      .on('error', reject);
+  });
+}
+
+function getRowValue(row, aliases) {
+  const normalizedAliases = aliases.map((alias) => String(alias).trim().toLowerCase());
+
+  for (const [rawKey, rawValue] of Object.entries(row || {})) {
+    const key = String(rawKey || '')
+      .replace(/^\uFEFF/, '')
+      .trim()
+      .replace(/^"|"$/g, '')
+      .trim()
+      .toLowerCase();
+
+    if (!normalizedAliases.includes(key)) {
+      continue;
+    }
+
+    if (rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '') {
+      return rawValue;
+    }
+  }
+
+  for (const alias of aliases) {
+    const value = row?.[alias];
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function splitCategoryPath(rawValue) {
+  if (rawValue === undefined || rawValue === null) {
+    return [];
+  }
+
+  return String(rawValue)
+    .split(/\s*(?:\/|\\|>|→|\|)\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 function tryDeleteImage(imageUrl) {
@@ -436,10 +690,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.get('/api/categories', (_req, res) => {
-  const rows = db
-    .prepare('SELECT id, name, parent_id FROM categories ORDER BY COALESCE(parent_id, id), name')
-    .all();
-  res.json(toCategoryTree(rows));
+  res.json(getCategoriesTreeCached());
 });
 
 app.post('/api/categories', (req, res) => {
@@ -457,6 +708,7 @@ app.post('/api/categories', (req, res) => {
   }
 
   const result = db.prepare('INSERT INTO categories (name, parent_id) VALUES (?, ?)').run(name, parentId);
+  invalidateCategoriesCache();
   res.status(201).json(getCategoryById(result.lastInsertRowid));
 });
 
@@ -465,6 +717,11 @@ app.put('/api/categories/:id', (req, res) => {
   const current = getCategoryById(id);
   if (!current) {
     res.status(404).json({ message: 'Категория не найдена' });
+    return;
+  }
+
+  if (isUncategorizedCategory(current)) {
+    res.status(400).json({ message: 'Нельзя редактировать служебную категорию' });
     return;
   }
 
@@ -489,7 +746,196 @@ app.put('/api/categories/:id', (req, res) => {
   }
 
   db.prepare('UPDATE categories SET name = ?, parent_id = ? WHERE id = ?').run(name, parentId, id);
+  invalidateCategoriesCache();
   res.json(getCategoryById(id));
+});
+
+// Массовый импорт товаров из CSV/JSON файла
+app.post('/api/products/import', importUpload.single('file'), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ message: 'Файл не загружен' });
+    return;
+  }
+
+  const duplicateStrategy = req.body?.duplicateStrategy === 'update' ? 'update' : 'skip';
+  const results = { imported: 0, updated: 0, skipped: 0, errors: [] };
+  const maxErrorDetails = 200;
+  let omittedErrorsCount = 0;
+  const appendImportError = (row, field, reason) => {
+    if (results.errors.length < maxErrorDetails) {
+      results.errors.push({ row, field, reason });
+      return;
+    }
+
+    omittedErrorsCount += 1;
+  };
+  const ext = path.extname(req.file.originalname || '').toLowerCase();
+  let isAborted = false;
+  req.on('aborted', () => {
+    isAborted = true;
+  });
+
+  let rows = [];
+  try {
+    if (ext === '.json' || req.file.mimetype.includes('json')) {
+      const parsed = JSON.parse(req.file.buffer.toString('utf-8'));
+      if (!Array.isArray(parsed)) {
+        res.status(400).json({ message: 'JSON должен содержать массив товаров' });
+        return;
+      }
+
+      rows = parsed;
+    } else {
+      rows = await parseCsvBuffer(req.file.buffer);
+    }
+  } catch (error) {
+    res.status(400).json({ message: `Ошибка парсинга файла: ${error.message}` });
+    return;
+  }
+
+  const categoryPathCache = new Map();
+  const existingProductsByName = new Map();
+  const updateProduct = db.prepare('UPDATE products SET unit = ?, price = ?, image_url = ?, category_id = ? WHERE id = ?');
+  const insertProduct = db.prepare(
+    'INSERT INTO products (name, sku, price, unit, image_url, category_id, is_custom) VALUES (?, ?, ?, ?, ?, ?, 0)'
+  );
+
+  db.prepare('SELECT id, name, image_url FROM products').all().forEach((product) => {
+    existingProductsByName.set(product.name, { id: product.id, image_url: product.image_url });
+  });
+
+  const resolveCategoryId = (categoryPath) => {
+    const normalizedPath = categoryPath.map((part) => String(part || '').trim()).filter(Boolean);
+    const finalPath = normalizedPath.length ? normalizedPath : ['Без категории'];
+    const key = finalPath.join(' > ').toLowerCase();
+    if (categoryPathCache.has(key)) {
+      return categoryPathCache.get(key);
+    }
+
+    const categoryId = ensureCategoryPath(finalPath);
+    categoryPathCache.set(key, categoryId);
+    return categoryId;
+  };
+
+  const processRow = (row, rowNum) => {
+    try {
+      const name = String(
+        getRowValue(row, ['Название', 'name', 'Name', 'title', 'Title']) || ''
+      ).trim();
+      const unit = parseUnit(getRowValue(row, ['Единица измерения', 'unit', 'Unit', 'measure', 'Measure']) || 'шт');
+      const price = parseNullablePrice(getRowValue(row, ['Цена', 'price', 'Price', 'cost', 'Cost']));
+      const categoryName = String(getRowValue(row, ['Категория', 'category', 'Category']) || '').trim();
+      const subcategoryName = String(
+        getRowValue(row, ['Подкатегория', 'subcategory', 'Subcategory', 'sub_category', 'Sub Category']) || ''
+      ).trim();
+      const categoryPathValue = getRowValue(row, [
+        'Путь категории',
+        'category_path',
+        'Category Path',
+        'Категория/Подкатегория',
+      ]);
+      const imageCandidate = getRowValue(row, ['Изображение', 'image', 'image_url', 'imageUrl', 'Image', 'Image URL']);
+      const image = parseImageUrl(imageCandidate);
+
+      if (!name) {
+        appendImportError(rowNum, 'name', 'Название обязательно');
+        results.skipped++;
+        return;
+      }
+
+      if (Number.isNaN(price)) {
+        appendImportError(rowNum, 'price', 'Неверный формат цены');
+        results.skipped++;
+        return;
+      }
+
+      if (image.error) {
+        appendImportError(rowNum, 'image', image.error);
+        results.skipped++;
+        return;
+      }
+
+      const categoryPathFromColumn = splitCategoryPath(categoryPathValue);
+      const categoryPath =
+        categoryPathFromColumn.length > 0
+          ? categoryPathFromColumn
+          : [
+              ...(categoryName ? [categoryName] : []),
+              ...(subcategoryName ? splitCategoryPath(subcategoryName) : []),
+            ];
+      const categoryId = resolveCategoryId(categoryPath);
+
+      const existing = existingProductsByName.get(name);
+
+      if (existing) {
+        if (duplicateStrategy === 'skip') {
+          results.skipped++;
+          return;
+        }
+
+        const nextImageUrl = image.provided ? image.value : existing.image_url;
+        updateProduct.run(unit, price, nextImageUrl, categoryId, existing.id);
+
+        if (existing.image_url && existing.image_url !== nextImageUrl) {
+          tryDeleteImage(existing.image_url);
+        }
+
+        existingProductsByName.set(name, { id: existing.id, image_url: nextImageUrl });
+        results.updated++;
+        return;
+      }
+
+      const created = insertProduct.run(name, null, price, unit, image.value, categoryId);
+      existingProductsByName.set(name, { id: created.lastInsertRowid, image_url: image.value });
+      results.imported++;
+    } catch (error) {
+      appendImportError(rowNum, 'unknown', String(error?.message || error));
+      results.skipped++;
+    }
+  };
+
+  const importTx = db.transaction((chunkRows, startIndex) => {
+    chunkRows.forEach((row, index) => {
+      if (isAborted) {
+        return;
+      }
+
+      const rowNum = startIndex + index + 1;
+      try {
+        processRow(row, rowNum);
+      } catch (error) {
+        appendImportError(rowNum, 'unknown', String(error?.message || error));
+        results.skipped++;
+      }
+    });
+  });
+
+  const chunkSize = 500;
+  for (let start = 0; start < rows.length; start += chunkSize) {
+    if (isAborted) {
+      break;
+    }
+
+    const chunkRows = rows.slice(start, start + chunkSize);
+    importTx(chunkRows, start);
+  }
+
+  invalidateCategoriesCache();
+
+  if (isAborted) {
+    appendImportError(0, 'summary', 'Импорт был прерван клиентом до завершения обработки');
+    return;
+  }
+
+  if (omittedErrorsCount > 0) {
+    results.errors.push({
+      row: 0,
+      field: 'summary',
+      reason: `Показаны первые ${maxErrorDetails} ошибок. Скрыто ещё: ${omittedErrorsCount}.`,
+    });
+  }
+
+  res.json(results);
 });
 
 app.delete('/api/categories/:id', (req, res) => {
@@ -497,6 +943,11 @@ app.delete('/api/categories/:id', (req, res) => {
   const current = getCategoryById(id);
   if (!current) {
     res.status(404).json({ message: 'Категория не найдена' });
+    return;
+  }
+
+  if (isUncategorizedCategory(current)) {
+    res.status(400).json({ message: 'Нельзя удалить служебную категорию' });
     return;
   }
 
@@ -513,12 +964,62 @@ app.delete('/api/categories/:id', (req, res) => {
   });
 
   trx();
+  invalidateCategoriesCache();
   res.status(204).send();
 });
 
 app.get('/api/products', (req, res) => {
-  const search = String(req.query.search || '').trim();
+  const rawSearch = String(req.query.search || '').trim();
+  // Разбиваем запрос на токены для поиска по каждому слову
+  const tokens = tokenizeSearch(rawSearch);
   const categoryId = req.query.category_id ? Number(req.query.category_id) : null;
+  const rawLimit = Number(req.query.limit);
+  const rawOffset = Number(req.query.offset);
+  const hasPagination = Number.isFinite(rawLimit) && rawLimit > 0;
+  const limit = hasPagination ? Math.min(Math.max(Math.trunc(rawLimit), 1), 500) : null;
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.trunc(rawOffset) : 0;
+
+  const whereParts = ['1 = 1'];
+  const whereParams = [];
+
+  const fromSql = `
+    FROM products p
+    LEFT JOIN categories c ON c.id = p.category_id
+    LEFT JOIN categories cp ON cp.id = c.parent_id
+  `;
+
+  if (tokens.length > 0) {
+    // Поиск по каждому токену (слову) - все слова должны совпасть
+    const tokenConditions = tokens.map(() => 
+      "(LOWER(normalize_text(p.name)) LIKE ? OR LOWER(normalize_text(COALESCE(p.sku, ''))) LIKE ? OR LOWER(normalize_text(COALESCE(c.name, ''))) LIKE ? OR LOWER(normalize_text(COALESCE(cp.name, ''))) LIKE ?)"
+    ).join(' AND ');
+    
+    whereParts.push(`(${tokenConditions})`);
+    
+    // Для каждого токена добавляем 4 параметра (name, sku, category, parent_category)
+    tokens.forEach(token => {
+      const value = `%${token}%`;
+      whereParams.push(value, value, value, value);
+    });
+  }
+
+  if (categoryId) {
+    whereParts.push(`
+      p.category_id IN (
+        WITH RECURSIVE category_subtree(id) AS (
+          SELECT id FROM categories WHERE id = ?
+          UNION ALL
+          SELECT c.id
+          FROM categories c
+          INNER JOIN category_subtree subtree ON subtree.id = c.parent_id
+        )
+        SELECT id FROM category_subtree
+      )
+    `);
+    whereParams.push(categoryId);
+  }
+
+  const whereSql = `WHERE ${whereParts.join(' AND ')}`;
 
   let sql = `
     SELECT
@@ -532,34 +1033,38 @@ app.get('/api/products', (req, res) => {
       p.is_custom,
       p.created_at,
       c.name AS category_name
-    FROM products p
-    LEFT JOIN categories c ON c.id = p.category_id
-    WHERE 1 = 1
+    ${fromSql}
+    ${whereSql}
   `;
 
-  const params = [];
-  if (search) {
-    sql += " AND (LOWER(p.name) LIKE ? OR LOWER(COALESCE(p.sku, '')) LIKE ?)";
-    const value = `%${search.toLowerCase()}%`;
-    params.push(value, value);
-  }
-
-  if (categoryId) {
-    sql += ' AND p.category_id = ?';
-    params.push(categoryId);
-  }
-
   sql += ' ORDER BY p.created_at DESC, p.id DESC';
-  res.json(db.prepare(sql).all(...params).map(normalizeProduct));
+
+  if (hasPagination) {
+    const total = db
+      .prepare(`SELECT COUNT(*) AS total ${fromSql} ${whereSql}`)
+      .get(...whereParams).total;
+    const rows = db.prepare(`${sql} LIMIT ? OFFSET ?`).all(...whereParams, limit, offset).map(normalizeProduct);
+    res.json({
+      items: rows,
+      total,
+      offset,
+      limit,
+      hasMore: offset + rows.length < total,
+    });
+    return;
+  }
+
+  res.json(db.prepare(sql).all(...whereParams).map(normalizeProduct));
 });
 
-app.post('/api/products', upload.single('image'), (req, res) => {
+app.post('/api/products', imageUpload.single('image'), (req, res) => {
   const name = String(req.body?.name || '').trim();
   const sku = String(req.body?.sku || '').trim() || null;
   const price = parseNullablePrice(req.body?.price);
   const unit = parseUnit(req.body?.unit);
   const categoryId = Number(req.body?.category_id);
   const isCustom = req.body?.is_custom === 'false' ? 0 : 1;
+  const parsedImage = parseImageUrl(req.body?.image_url ?? req.body?.imageUrl);
 
   if (!name) {
     res.status(400).json({ message: 'Название товара обязательно' });
@@ -576,7 +1081,12 @@ app.post('/api/products', upload.single('image'), (req, res) => {
     return;
   }
 
-  const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+  if (parsedImage.error) {
+    res.status(400).json({ message: parsedImage.error });
+    return;
+  }
+
+  const imageUrl = req.file ? `/uploads/${req.file.filename}` : parsedImage.value;
   const result = db
     .prepare(
       'INSERT INTO products (name, sku, price, unit, image_url, category_id, is_custom) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -587,7 +1097,7 @@ app.post('/api/products', upload.single('image'), (req, res) => {
   res.status(201).json(normalizeProduct(created));
 });
 
-app.put('/api/products/:id', upload.single('image'), (req, res) => {
+app.put('/api/products/:id', imageUpload.single('image'), (req, res) => {
   const id = Number(req.params.id);
   const current = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
   if (!current) {
@@ -600,6 +1110,7 @@ app.put('/api/products/:id', upload.single('image'), (req, res) => {
   const price = req.body?.price === undefined ? current.price : parseNullablePrice(req.body.price);
   const unit = req.body?.unit === undefined ? parseUnit(current.unit) : parseUnit(req.body.unit);
   const categoryId = req.body?.category_id === undefined ? current.category_id : Number(req.body.category_id);
+  const parsedImage = parseImageUrl(req.body?.image_url ?? req.body?.imageUrl);
 
   if (!name) {
     res.status(400).json({ message: 'Название товара обязательно' });
@@ -616,9 +1127,16 @@ app.put('/api/products/:id', upload.single('image'), (req, res) => {
     return;
   }
 
+  if (parsedImage.error) {
+    res.status(400).json({ message: parsedImage.error });
+    return;
+  }
+
   let imageUrl = current.image_url;
   if (req.file) {
     imageUrl = `/uploads/${req.file.filename}`;
+  } else if (parsedImage.provided) {
+    imageUrl = parsedImage.value;
   }
 
   db.prepare('UPDATE products SET name = ?, sku = ?, price = ?, unit = ?, image_url = ?, category_id = ? WHERE id = ?').run(
@@ -631,11 +1149,34 @@ app.put('/api/products/:id', upload.single('image'), (req, res) => {
     id
   );
 
-  if (req.file && current.image_url && current.image_url !== imageUrl) {
+  if (current.image_url && current.image_url !== imageUrl) {
     tryDeleteImage(current.image_url);
   }
 
   res.json(normalizeProduct(db.prepare('SELECT * FROM products WHERE id = ?').get(id)));
+});
+
+app.delete('/api/products', (_req, res) => {
+  const products = db.prepare('SELECT id, image_url FROM products').all();
+  if (products.length === 0) {
+    res.status(204).send();
+    return;
+  }
+
+  const trx = db.transaction(() => {
+    db.prepare('DELETE FROM favorites').run();
+    db.prepare('DELETE FROM list_items').run();
+    db.prepare('DELETE FROM products').run();
+  });
+
+  trx();
+
+  const uniqueImages = Array.from(new Set(products.map((product) => product.image_url).filter(Boolean)));
+  for (const imageUrl of uniqueImages) {
+    tryDeleteImage(imageUrl);
+  }
+
+  res.status(204).send();
 });
 
 app.delete('/api/products/:id', (req, res) => {
@@ -893,7 +1434,13 @@ app.use((error, _req, res, _next) => {
     return;
   }
 
-  if (error?.message?.includes('JPEG') || error?.message?.includes('PNG') || error?.message?.includes('GIF')) {
+  if (
+    error?.message?.includes('JPEG') ||
+    error?.message?.includes('PNG') ||
+    error?.message?.includes('GIF') ||
+    error?.message?.includes('CSV') ||
+    error?.message?.includes('JSON')
+  ) {
     res.status(400).json({ message: error.message });
     return;
   }
