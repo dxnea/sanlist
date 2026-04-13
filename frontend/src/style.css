@@ -87,10 +87,21 @@ body,
 #app {
   margin: 0;
   min-height: 100%;
+  min-height: 100dvh;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   background: var(--bg);
   color: var(--text);
   overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 767px) {
+  html, body, #app {
+    padding-top: env(safe-area-inset-top, 0);
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    padding-left: env(safe-area-inset-left, 0);
+    padding-right: env(safe-area-inset-right, 0);
+  }
 }
 
 button,
@@ -1602,6 +1613,8 @@ select {
 @media (max-width: 1024px) {
   .main-layout {
     grid-template-columns: 1fr;
+    padding: 12px;
+    gap: 12px;
   }
 
   .desktop-only {
@@ -1619,12 +1632,28 @@ select {
   .btn-primary span {
     display: none;
   }
+
+  .content {
+    padding: 12px;
+    box-shadow: none;
+  }
+
+  .content-top {
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+  }
 }
 
 @media (max-width: 767px) {
   .topbar {
     gap: 8px;
-    padding: 10px;
+    padding: 10px 12px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  }
+
+  .topbar-actions .btn {
+    min-height: 42px;
+    min-width: 42px;
   }
 
   .brand {
@@ -1635,6 +1664,20 @@ select {
   .main-layout {
     padding: 10px;
     gap: 10px;
+  }
+
+  .content {
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  .content-top {
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+  }
+
+  .content-top h2 {
+    font-size: 1rem;
   }
 
   .form-grid,
@@ -1650,20 +1693,124 @@ select {
     height: clamp(260px, calc(100dvh - 190px), 1000px);
     min-height: 240px;
   }
+
+  .product-card {
+    min-height: 300px;
+    border-radius: 14px;
+  }
+
+  .product-card-image {
+    height: 160px;
+  }
+
+  .product-card-body {
+    padding: 10px;
+  }
+
+  .product-card-name {
+    font-size: 0.92rem;
+  }
+
+  .cart-drawer {
+    border-radius: 16px 16px 0 0;
+    top: auto;
+    bottom: 0;
+    right: 0;
+    left: 0;
+    width: 100%;
+    max-height: 85vh;
+    transform: translateY(100%);
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.12);
+  }
+
+  .cart-drawer.open {
+    transform: translateY(0);
+  }
+
+  .mobile-categories {
+    border-radius: 16px 16px 0 0;
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 85vh;
+    transform: translateY(100%);
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.12);
+  }
+
+  .mobile-categories.open {
+    transform: translateY(0);
+  }
 }
 
 @media (max-width: 479px) {
-  .product-card {
-    min-height: 260px;
+  .topbar {
+    padding: 8px 10px;
+    gap: 6px;
   }
 
-  .product-image {
-    height: 112px;
+  .topbar-actions {
+    gap: 6px;
+  }
+
+  .btn {
+    min-height: 36px;
+    padding: 0 10px;
+    font-size: 0.85rem;
+  }
+
+  .search-input {
+    height: 38px;
+    font-size: 0.9rem;
+  }
+
+  .product-card {
+    min-height: 280px;
+    border-radius: 12px;
+  }
+
+  .product-card-image {
+    height: 140px;
+  }
+
+  .product-card-body {
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .product-card-name {
+    font-size: 0.88rem;
+  }
+
+  .icon-button {
+    width: 30px;
+    height: 30px;
+  }
+
+  .button-primary {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+  }
+
+  .quantity-input {
+    padding: 6px;
+    font-size: 0.85rem;
   }
 
   .products-virtual-shell {
     height: clamp(220px, calc(100dvh - 170px), 820px);
     min-height: 220px;
+  }
+
+  .content {
+    padding: 8px;
+    border-radius: 12px;
+  }
+
+  .content-top h2 {
+    font-size: 0.95rem;
   }
 
   .cart-drawer,
@@ -1674,16 +1821,25 @@ select {
     right: 0;
     width: 100%;
     border-radius: 0;
-    border-left: none;
-    border-right: none;
+    max-height: 100vh;
   }
 
   .cart-drawer {
     transform: translateX(100%);
+    box-shadow: -8px 0 30px rgba(0, 0, 0, 0.12);
+  }
+
+  .cart-drawer.open {
+    transform: translateX(0);
   }
 
   .mobile-categories {
     transform: translateX(-100%);
+    box-shadow: 8px 0 30px rgba(0, 0, 0, 0.12);
+  }
+
+  .mobile-categories.open {
+    transform: translateX(0);
   }
 
   .modal-overlay {
@@ -1695,6 +1851,13 @@ select {
     height: 100dvh;
     max-height: none;
     border-radius: 0;
+  }
+
+  .fab {
+    right: 12px;
+    bottom: 12px;
+    width: 52px;
+    height: 52px;
   }
 }
 
