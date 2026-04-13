@@ -143,6 +143,7 @@ select {
 
 .search-wrap {
   position: relative;
+  max-width: 480px;
 }
 
 .search-icon {
@@ -1631,6 +1632,10 @@ select {
 
   .btn-primary span {
     display: none;
+  }
+
+  .search-wrap {
+    max-width: 100%;
   }
 
   .content {
