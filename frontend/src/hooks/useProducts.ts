@@ -116,6 +116,7 @@ export function useProducts(options: UseProductsOptions) {
       setHasMoreProducts(true);
     }
     pendingOffsetRef.current = 0;
+    lastRequestKeyRef.current = '';
   }, [search, selectedCategoryId, showFavoritesOnly]);
 
   useEffect(() => {
