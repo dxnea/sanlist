@@ -513,6 +513,7 @@ function App() {
   const [isCatalogCompact, setIsCatalogCompact] = useState(() => localStorage.getItem(CATALOG_COMPACT_KEY) === '1');
   const [isCatalogSettingsOpen, setIsCatalogSettingsOpen] = useState(false);
   const [isImportingJson, setIsImportingJson] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
 
   // const [hasMoreProducts, setHasMoreProducts] = useState(true);
   // const [isLoadingMoreProducts, setIsLoadingMoreProducts] = useState(false);
@@ -1325,6 +1326,30 @@ function App() {
     };
     input.click();
   }, [loadCategories, setAllProducts]);
+
+  const handleDeleteAllProducts = useCallback(async () => {
+    const confirmed = await openConfirmDialog({
+      title: 'Удалить все товары',
+      description: 'Это действие удалит все товары, позиции списков и избранное. Продолжить?',
+      confirmText: 'Удалить всё',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+
+    setIsDeletingAll(true);
+    try {
+      const { deleteAllProducts } = await import('./db/dbService');
+      await deleteAllProducts();
+      setAllProducts([]);
+      setListItems([]);
+      setFavoriteProductIds([]);
+      toast.success('Все товары удалены');
+    } catch {
+      toast.error('Не удалось удалить товары');
+    } finally {
+      setIsDeletingAll(false);
+    }
+  }, [openConfirmDialog]);
 
   const editItemNote = useCallback(
     async (item: ListItem) => {
@@ -2256,6 +2281,21 @@ function App() {
                 onClick={handleImportJson}
               >
                 <FiUpload /> {isImportingJson ? 'Импорт...' : 'Импорт каталога'}
+              </button>
+            </div>
+
+            <div className="settings-block">
+              <h4 className="settings-title">Удаление данных</h4>
+              <p className="settings-hint" style={{ marginBottom: '8px' }}>
+                Удалить все товары, позиции списков и избранное
+              </p>
+              <button
+                className="btn btn-danger"
+                type="button"
+                disabled={isDeletingAll}
+                onClick={handleDeleteAllProducts}
+              >
+                <FiTrash2 /> {isDeletingAll ? 'Удаление...' : 'Удалить все товары'}
               </button>
             </div>
           </div>
