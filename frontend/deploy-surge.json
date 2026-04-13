@@ -1,0 +1,10 @@
+{
+  "name": "sanlist-pwa",
+  "version": "1.0.0",
+  "scripts": {
+    "deploy": "surge dist"
+  },
+  "devDependencies": {
+    "surge": "^0.24.0"
+  }
+}
