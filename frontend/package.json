@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && node scripts/update-sw-assets.mjs",
+    "build": "tsc && vite build && node scripts/update-sw-assets.mjs && node scripts/fix-manifest.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {
