@@ -118,9 +118,6 @@ select {
   position: sticky;
   top: 0;
   z-index: 30;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
   padding: 10px 20px;
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   backdrop-filter: blur(12px);
@@ -139,10 +136,13 @@ select {
   font-size: 1rem;
   color: var(--text-strong);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .search-wrap {
   position: relative;
+  flex: 1;
+  min-width: 0;
   max-width: 480px;
 }
 
@@ -178,6 +178,7 @@ select {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .btn {
@@ -1628,14 +1629,25 @@ select {
 
   .topbar-row {
     flex-wrap: wrap;
+    gap: 8px;
   }
 
-  .btn-primary span {
+  .brand {
     display: none;
   }
 
   .search-wrap {
+    order: 10;
+    flex: 1 1 100%;
     max-width: 100%;
+  }
+
+  .topbar-actions {
+    flex-wrap: wrap;
+  }
+
+  .btn-primary span {
+    display: none;
   }
 
   .content {

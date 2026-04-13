@@ -1743,6 +1743,20 @@ function App() {
             <FiMenu />
           </button>
           <div className="brand">Сантехнический помощник</div>
+          <div className="search-wrap">
+            <FiSearch className="search-icon" />
+            <input
+              id="product-search"
+              name="search"
+              ref={searchInputRef}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className="search-input"
+              placeholder="Поиск по названию"
+              autoComplete="off"
+              aria-label="Поиск товаров"
+            />
+          </div>
           <div className="topbar-actions">
             <button
               className="btn btn-soft theme-btn"
@@ -1778,20 +1792,6 @@ function App() {
               <span>{formatQuantity(cartCount)}</span>
             </button>
           </div>
-        </div>
-        <div className="search-wrap">
-          <FiSearch className="search-icon" />
-          <input
-            id="product-search"
-            name="search"
-            ref={searchInputRef}
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="search-input"
-            placeholder="Поиск по названию"
-            autoComplete="off"
-            aria-label="Поиск товаров"
-          />
         </div>
       </header>
 
