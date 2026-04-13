@@ -25,6 +25,8 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: cd frontend && npm ci
       - run: cd frontend && npm run build
+        env:
+          GITHUB_PAGES: 'true'
       - uses: actions/upload-pages-artifact@v3
         with:
           path: frontend/dist
