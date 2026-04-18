@@ -26,6 +26,7 @@ import { useWorkspaceStore } from './store/useWorkspaceStore';
 import { useProducts } from './hooks/useProducts';
 import { readFileAsDataURL } from './utils/fileReader';
 import { importPwaExport } from './db/importExport';
+import { exportFromPwa } from './db/importExport';
 
 type Category = {
   id: number;
@@ -513,6 +514,7 @@ function App() {
   const [isCatalogCompact, setIsCatalogCompact] = useState(() => localStorage.getItem(CATALOG_COMPACT_KEY) === '1');
   const [isCatalogSettingsOpen, setIsCatalogSettingsOpen] = useState(false);
   const [isImportingJson, setIsImportingJson] = useState(false);
+  const [isExportingJson, setIsExportingJson] = useState(false);
   const [isDeletingAll, setIsDeletingAll] = useState(false);
 
   // const [hasMoreProducts, setHasMoreProducts] = useState(true);
@@ -1326,6 +1328,29 @@ function App() {
     };
     input.click();
   }, [loadCategories, setAllProducts]);
+
+  const handleExportJson = useCallback(async () => {
+    setIsExportingJson(true);
+    try {
+      const blob = await exportFromPwa();
+      const url = URL.createObjectURL(blob);
+      const now = new Date();
+      const pad = (v: number) => String(v).padStart(2, '0');
+      const fileName = `santex-backup-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}.json`;
+
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = fileName;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      toast.success('Бэкап сохранён в загрузки');
+    } catch (error) {
+      console.error('Export error:', error);
+      toast.error('Не удалось экспортировать бэкап');
+    } finally {
+      setIsExportingJson(false);
+    }
+  }, []);
 
   const handleDeleteAllProducts = useCallback(async () => {
     const confirmed = await openConfirmDialog({
@@ -2274,6 +2299,14 @@ function App() {
               <p className="settings-hint" style={{ marginBottom: '8px' }}>
                 Загрузите JSON-файл экспорта (pwa-export.json) для добавления товаров и категорий
               </p>
+              <button
+                className="btn btn-soft"
+                type="button"
+                disabled={isExportingJson}
+                onClick={handleExportJson}
+              >
+                <FiCheck /> {isExportingJson ? 'Экспорт...' : 'Экспорт бэкапа'}
+              </button>
               <button
                 className="btn btn-primary"
                 type="button"
